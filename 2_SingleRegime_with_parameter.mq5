@@ -1999,10 +1999,11 @@ void ExportMLDataset(ulong ticket, const float &features[])
 //|                                                                  |
 //+------------------------------------------------------------------+
 double CalculateLotSize(const double slDistanceInPrice, const ENUM_ORDER_TYPE type, const double price)
-  {
+{
    if(InpRiskPercent <= 0.0 || slDistanceInPrice <= 0.0)
       return 0.0;
 
+   // 1. Calcolo del rischio puro in valuta
    double riskMoney = AccountInfoDouble(ACCOUNT_BALANCE) * (InpRiskPercent / 100.0);
    if(riskMoney <= 0.0)
       return 0.0;
@@ -2012,12 +2013,25 @@ double CalculateLotSize(const double slDistanceInPrice, const ENUM_ORDER_TYPE ty
    if(tickValue <= 0.0 || tickSize <= 0.0)
       return 0.0;
 
+   // 2. Calcolo dei lotti matematici (Senza limiti)
    double lossPerLotAtSL = (slDistanceInPrice / tickSize) * tickValue;
    if(lossPerLotAtSL <= 0.0)
       return 0.0;
-
    double rawVolume = riskMoney / lossPerLotAtSL;
 
+   // 3. SMART MARGIN CAP (La magia per la leva 1:33)
+   double marginRequired;
+   if(OrderCalcMargin(type, _Symbol, rawVolume, price, marginRequired))
+   {
+       double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * 0.90; // Usiamo massimo il 90% del conto
+       if(marginRequired > freeMargin)
+       {
+           // Se sforiamo, riduciamo il volume proporzionalmente per farlo entrare!
+           rawVolume = rawVolume * (freeMargin / marginRequired);
+       }
+   }
+
+   // 4. Normalizzazione ai requisiti del broker
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
@@ -2025,10 +2039,12 @@ double CalculateLotSize(const double slDistanceInPrice, const ENUM_ORDER_TYPE ty
    double volume = MathMax(minLot, MathMin(maxLot, rawVolume));
    if(step > 0.0)
       volume = MathFloor(volume / step) * step;
+   
+   // Controllo di sicurezza finale
    volume = MathMax(minLot, MathMin(maxLot, volume));
 
    return volume;
-  }
+}
 
 //+------------------------------------------------------------------+
 //| Inferenza ML ONNX su 9 feature (ordine fisso modello)            |
